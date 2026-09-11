@@ -30,3 +30,4 @@ htmlcov/
 # Docker local data (if mounted locally)
 postgres_data/
 .env
+ytdlp_cookies.txt

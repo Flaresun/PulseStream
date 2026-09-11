@@ -43,7 +43,9 @@ class StreamingMusicAPI:
 
         self.youtube_base_url = "https://www.youtube.com/watch?v="
         self.ydl_opts = {
-                    'format': 'bestaudio/best',
+                    # Prefer AAC in an m4a container — the only audio format AVPlayer
+                    # supports natively on iOS.  WebM/Opus (itag 251) must be avoided.
+                    'format': 'bestaudio[ext=m4a]/bestaudio[acodec=aac]/best',
                     'quiet': True,
                     'no_warnings': True,
                     'remote_components': 'ejs:github',
@@ -80,7 +82,7 @@ class StreamingMusicAPI:
             "metadata": None
         }
     
-    async def resolve_track_stream(self, youtube_id: str, client_metadata: dict, background_tasks: Any) -> dict:
+    async def resolve_track_stream(self, youtube_id: str, client_metadata: dict, background_tasks: Any, request=None) -> dict:
         """
         Main entry point for client song requests using client-provided metadata.
         """
@@ -93,12 +95,21 @@ class StreamingMusicAPI:
 
         # 2. CASE A: Song is READY in S3
         if current_status == "READY" and track.get("s3_key"):
-            logger.info(f"Track {youtube_id} is READY. Generating presigned S3 URL.")
-            s3_url = self.generate_s3_url(track["s3_key"], presigned=True)
+            # Return the server-side HLS proxy URL instead of a bare presigned manifest URL.
+            # The manifest references segments with relative paths; if the client resolves
+            # those against the presigned manifest URL the signature is stripped and S3
+            # returns 403.  The proxy endpoint rewrites every segment line to its own
+            # presigned URL before sending the manifest to AVPlayer.
+            if request is not None:
+                base = str(request.base_url).rstrip("/")
+                stream_url = f"{base}/api/v1/stream/hls/{youtube_id}/playlist.m3u8"
+            else:
+                stream_url = self.generate_s3_url(track["s3_key"], presigned=True)
+            logger.info(f"Track {youtube_id} is READY. Serving via HLS proxy: {stream_url}")
             return {
                 "source": "s3",
                 "s3_status": "READY",
-                "stream_url": s3_url,
+                "stream_url": stream_url,
                 "metadata": {"title": track.get("title")}
             }
 
@@ -139,6 +150,51 @@ class StreamingMusicAPI:
             "metadata": client_metadata
         }
     
+    async def serve_hls_manifest(self, youtube_id: str, request=None) -> str:
+        """
+        Fetches playlist.m3u8 from S3 and rewrites each .ts segment line to a
+        server-proxy URL so AVPlayer never contacts S3 directly.
+        """
+        s3_prefix = f"tracks/{youtube_id}"
+        manifest_key = f"{s3_prefix}/playlist.m3u8"
+
+        def _fetch():
+            response = self.s3_client.get_object(Bucket=self.s3_bucket_name, Key=manifest_key)
+            return response["Body"].read().decode("utf-8")
+
+        try:
+            content = await asyncio.to_thread(_fetch)
+        except Exception as e:
+            raise ValueError(f"Manifest not found in S3 for {youtube_id}: {e}")
+
+        base = str(request.base_url).rstrip("/") if request else ""
+
+        rewritten = []
+        for line in content.splitlines():
+            stripped = line.strip()
+            if stripped.endswith(".ts"):
+                rewritten.append(f"{base}/api/v1/stream/hls/{youtube_id}/{stripped}")
+            else:
+                rewritten.append(line)
+
+        return "\n".join(rewritten)
+
+    async def serve_hls_segment(self, youtube_id: str, segment: str) -> bytes:
+        """
+        Fetches a single .ts segment from S3 using server-side credentials and
+        returns the raw bytes to stream to AVPlayer.
+        """
+        segment_key = f"tracks/{youtube_id}/{segment}"
+
+        def _fetch():
+            response = self.s3_client.get_object(Bucket=self.s3_bucket_name, Key=segment_key)
+            return response["Body"].read()
+
+        try:
+            return await asyncio.to_thread(_fetch)
+        except Exception as e:
+            raise ValueError(f"Segment {segment} not found in S3 for {youtube_id}: {e}")
+
     async def get_direct_youtube_cdn_url(self, youtube_id: str) -> str:
         """
         Extracts just the fast CDN URL without parsing full metadata.

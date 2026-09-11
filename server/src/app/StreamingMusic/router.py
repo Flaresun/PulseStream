@@ -1,4 +1,5 @@
-from fastapi import APIRouter, BackgroundTasks, Body, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, Body, HTTPException, Request, status
+from fastapi.responses import Response
 from app.streamingMusic.models import ClientTrackMetadata, StreamResponseModel, TrackStatusResponse, DeleteTrackResponse
 from app.streamingMusic.service import StreamingMusicAPI
 from app.core.database import execute_query
@@ -15,20 +16,57 @@ streaming_api = StreamingMusicAPI(
 async def resolve_stream(
     youtube_id: str,
     background_tasks: BackgroundTasks,
-    client_metadata: ClientTrackMetadata = Body(...)  # Body(...) makes it mandatory
+    request: Request,
+    client_metadata: ClientTrackMetadata = Body(...),
 ):
     """
     Resolves audio stream for AVQueuePlayer using strictly typed client metadata.
-    Returns S3 presigned URL if READY, or direct YouTube CDN URL + launches background worker.
+    READY tracks return the server-side HLS proxy URL so segment requests stay authorised.
+    NOT_CACHED tracks return the YouTube CDN URL (AAC/m4a) and launch the background worker.
     """
     try:
-        # Convert the Pydantic model to a standard dictionary to pass to our service layer
         meta_dict = client_metadata.model_dump()
-        return await streaming_api.resolve_track_stream(youtube_id, meta_dict, background_tasks)
+        return await streaming_api.resolve_track_stream(youtube_id, meta_dict, background_tasks, request)
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to resolve stream for video {youtube_id}"
+        )
+
+
+@router.get("/hls/{youtube_id}/playlist.m3u8")
+async def serve_hls_manifest(youtube_id: str, request: Request):
+    """
+    Fetches playlist.m3u8 from S3 and rewrites each segment line to a server-side
+    proxy URL so AVPlayer never contacts S3 directly.
+    """
+    try:
+        manifest = await streaming_api.serve_hls_manifest(youtube_id, request)
+        return Response(content=manifest, media_type="application/x-mpegURL")
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to serve HLS manifest for {youtube_id}: {str(e)}"
+        )
+
+
+@router.get("/hls/{youtube_id}/{segment}")
+async def serve_hls_segment(youtube_id: str, segment: str):
+    """
+    Fetches a single .ts segment from S3 using server-side credentials and
+    streams it to AVPlayer.  The client never needs direct S3 access.
+    """
+    try:
+        data = await streaming_api.serve_hls_segment(youtube_id, segment)
+        return Response(content=data, media_type="video/MP2T")
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to serve segment {segment} for {youtube_id}: {str(e)}"
         )
 
 
