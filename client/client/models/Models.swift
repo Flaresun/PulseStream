@@ -13,6 +13,27 @@ struct Thumbnail: Codable, Hashable {
     let url: String
     let width: Int
     let height: Int
+
+    // ytmusicapi only ever gives us a couple of small preset sizes (often
+    // capped at 120x120), which look blurry once stretched to fill list rows
+    // or the Now Playing artwork. Google's yt3.googleusercontent.com URLs
+    // embed a live resize directive (`=wNNN-hNNN-...`) rather than pointing
+    // at a fixed-size asset, so we can request a size matched to where the
+    // image is actually displayed instead of upscaling the small default.
+    func url(forSize size: Int) -> URL? {
+        if let range = url.range(of: #"=w\d+-h\d+"#, options: .regularExpression) {
+            let rewritten = url.replacingCharacters(in: range, with: "=w\(size)-h\(size)")
+            return URL(string: rewritten)
+        }
+        // Fixed-preset thumbnails (e.g. i.ytimg.com/vi/<id>/mqdefault.jpg) don't
+        // support arbitrary sizes — fall back to the largest preset that's
+        // guaranteed to exist for any video.
+        if url.contains("ytimg.com"), let range = url.range(of: #"/\w*default\.jpg$"#, options: .regularExpression) {
+            let rewritten = url.replacingCharacters(in: range, with: "/hqdefault.jpg")
+            return URL(string: rewritten)
+        }
+        return URL(string: url)
+    }
 }
 
 // MARK: - Domain Models (Canonical playback model used by AudioEngine)
@@ -31,16 +52,14 @@ struct Track: Codable, Identifiable, Hashable {
     let durationSeconds: Int
     let thumbnails: [Thumbnail]?
 
-    // Smallest thumbnail — suitable for list rows and mini player
+    // Sized for list rows and the mini player (up to ~144pt @3x)
     var primaryThumbnailURL: URL? {
-        guard let urlString = thumbnails?.first?.url else { return nil }
-        return URL(string: urlString)
+        thumbnails?.first?.url(forSize: 160)
     }
 
-    // Largest thumbnail — suitable for the full Now Playing screen
+    // Sized for the full Now Playing artwork (up to ~370pt @3x)
     var bestThumbnailURL: URL? {
-        guard let urlString = thumbnails?.last?.url else { return nil }
-        return URL(string: urlString)
+        thumbnails?.last?.url(forSize: 1024)
     }
 }
 
@@ -65,8 +84,8 @@ struct SearchSong: Codable, Identifiable, Hashable {
     let videoId: String
     let title: String
     let artists: [SearchArtist]
-    let album: SearchAlbum
-    let durationSeconds: Int
+    let album: SearchAlbum?
+    let durationSeconds: Int?
     let thumbnails: [Thumbnail]
     let isExplicit: Bool
 
@@ -80,7 +99,7 @@ struct SearchSong: Codable, Identifiable, Hashable {
             videoId: videoId,
             title: title,
             artists: artists.map { $0.toArtist() },
-            durationSeconds: durationSeconds,
+            durationSeconds: durationSeconds ?? 0,
             thumbnails: thumbnails
         )
     }
@@ -94,7 +113,7 @@ struct NextSongTrack: Codable, Identifiable, Hashable {
     let title: String
     let artists: [SearchArtist]
     // Server field is "length" (e.g. "3:45"), not duration_seconds
-    let length: String
+    let length: String?
     // Server field is "thumbnail" (singular), not "thumbnails"
     let thumbnail: [Thumbnail]
 
@@ -103,7 +122,7 @@ struct NextSongTrack: Codable, Identifiable, Hashable {
             videoId: videoId,
             title: title,
             artists: artists.map { $0.toArtist() },
-            durationSeconds: Self.parseDuration(length),
+            durationSeconds: length.map(Self.parseDuration) ?? 0,
             thumbnails: thumbnail
         )
     }
@@ -120,7 +139,7 @@ struct NextSongTrack: Codable, Identifiable, Hashable {
 
 struct PlaylistTracksResponse: Codable {
     let tracks: [NextSongTrack]
-    let playlistId: String
+    let playlistId: String?
     // Browse ID passed to /songs/lyrics/{id} — not actual lyrics text
     let lyrics: String?
 }
@@ -182,4 +201,67 @@ struct ResolveStreamRequest: nonisolated Codable {
         case thumbnailUrl = "thumbnail_url"
         case artists
     }
+}
+
+// MARK: - History Models
+
+struct HistoryEntry: Codable, Identifiable, Hashable {
+    let historyId: Int
+    let videoId: String
+    let title: String
+    let artists: [SearchArtist]
+    let durationSeconds: Int
+    let thumbnailUrl: String?
+    let playedAt: Double // epoch seconds
+
+    var id: Int { historyId }
+
+    var playedAtDate: Date {
+        Date(timeIntervalSince1970: playedAt)
+    }
+
+    func toTrack() -> Track {
+        Track(
+            videoId: videoId,
+            title: title,
+            artists: artists.map { $0.toArtist() },
+            durationSeconds: durationSeconds,
+            thumbnails: thumbnailUrl.map { [Thumbnail(url: $0, width: 0, height: 0)] }
+        )
+    }
+}
+
+struct RecordPlayRequest: Encodable {
+    let playedDurationSeconds: Int
+    let completionRate: Double
+    let wasSkipped: Bool
+}
+
+// MARK: - Home Models
+
+struct HomeSong: Codable, Identifiable, Hashable {
+    let videoId: String
+    let title: String
+    let artists: [SearchArtist]
+    let thumbnails: [Thumbnail]
+    let durationSeconds: Int?
+
+    var id: String { videoId }
+
+    func toTrack() -> Track {
+        Track(
+            videoId: videoId,
+            title: title,
+            artists: artists.map { $0.toArtist() },
+            durationSeconds: durationSeconds ?? 0,
+            thumbnails: thumbnails
+        )
+    }
+}
+
+struct HomeResponse: Codable {
+    let speedDial: [HomeSong]
+    let forgottenFavorites: [HomeSong]
+    let quickPicks: [HomeSong]
+    let explore: [HomeSong]
 }

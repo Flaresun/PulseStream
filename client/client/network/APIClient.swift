@@ -89,6 +89,48 @@ actor APIClient {
         return try decode(StreamResponse.self, from: data, response: response)
     }
 
+    // MARK: - Home
+
+    func getHome() async throws -> HomeResponse {
+        return try await get("/home")
+    }
+
+    // MARK: - History
+
+    func getHistory() async throws -> [HistoryEntry] {
+        return try await get("/history")
+    }
+
+    func recordPlay(
+        videoId: String,
+        playedDurationSeconds: Int,
+        completionRate: Double,
+        wasSkipped: Bool
+    ) async throws {
+        guard let url = URL(string: "\(baseURL)/history/play/\(videoId)") else {
+            throw APIError.invalidURL
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.addValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONEncoder().encode(
+            RecordPlayRequest(
+                playedDurationSeconds: playedDurationSeconds,
+                completionRate: completionRate,
+                wasSkipped: wasSkipped
+            )
+        )
+
+        // The endpoint returns 204 No Content on success, so we check the
+        // status directly rather than going through decode<T>.
+        let (_, response) = try await perform(request)
+        guard let httpResponse = response as? HTTPURLResponse,
+              (200...299).contains(httpResponse.statusCode) else {
+            throw APIError.requestFailed((response as? HTTPURLResponse)?.statusCode ?? -1)
+        }
+    }
+
     // MARK: - Shared Helpers
 
     private func perform(_ request: URLRequest) async throws -> (Data, URLResponse) {

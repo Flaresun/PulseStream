@@ -5,7 +5,7 @@ struct SongRowView: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            AsyncImage(url: URL(string: song.thumbnails.first?.url ?? "")) { image in
+            AsyncImage(url: song.thumbnails.first?.url(forSize: 160)) { image in
                 image.resizable().aspectRatio(contentMode: .fill)
             } placeholder: {
                 RoundedRectangle(cornerRadius: 6)
@@ -26,7 +26,7 @@ struct SongRowView: View {
 
             Spacer()
 
-            Text(formatDuration(song.durationSeconds))
+            Text(formatDuration(song.durationSeconds ?? 0))
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .monospacedDigit()

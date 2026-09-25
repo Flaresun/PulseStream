@@ -13,6 +13,10 @@ final class AudioEngine {
     var isLoadingStream: Bool = false
     var playbackProgress: Double = 0.0 // 0.0 to 1.0
     var duration: Double = 0.0
+    // Raw elapsed playback time in seconds, updated on the same tick as
+    // playbackProgress. Lyrics sync reads this directly instead of
+    // back-deriving elapsed time via `playbackProgress * duration`.
+    var elapsedSeconds: Double = 0.0
 
     // The Logical Queue
     var queue: [Track] = []
@@ -20,9 +24,26 @@ final class AudioEngine {
     var currentLyricsBrowseId: String? = nil
      
     // MARK: - Private Properties
-    private var player: AVPlayer = AVPlayer()
-    private var timeObserverToken: Any?
-    private var cancellables = Set<AnyCancellable>()
+    // Not read by any View, so Observation's access-tracking is both unneeded
+    // overhead and (per the historySession crash) an actual exclusivity-check
+    // risk for internal engine bookkeeping — ignore it for all of these.
+    @ObservationIgnored private var player: AVPlayer = AVPlayer()
+    @ObservationIgnored private var timeObserverToken: Any?
+    @ObservationIgnored private var cancellables = Set<AnyCancellable>()
+
+    // Tracks engagement for the currently-loaded track so we only record a
+    // play once it's a genuine listen, not on every tap/skip.
+    private struct HistorySession {
+        let track: Track
+        var maxElapsedSeconds: Double = 0
+        var metThreshold: Bool = false
+    }
+    @ObservationIgnored private var historySession: HistorySession?
+
+    // Guards against advancing to the next track twice for the same item —
+    // both the "reached known duration" check below and AVPlayerItemDidPlayToEndTime
+    // can fire for the same completion (see addPlayerObservers).
+    @ObservationIgnored private var hasAdvancedForCurrentTrack = false
     
     // MARK: - Initialization
     init() {
@@ -72,9 +93,12 @@ final class AudioEngine {
     }
     
     func seek(to percentage: Double) {
-        guard let currentItem = player.currentItem, duration > 0 else { return }
-        let timeInSeconds = percentage * duration
-        let targetTime = CMTime(seconds: timeInSeconds, preferredTimescale: 600)
+        guard player.currentItem != nil, duration > 0 else { return }
+        // Update immediately so the scrubber reflects the new position without waiting
+        // for the next periodic observer tick (up to 0.5 s later).
+        playbackProgress = percentage
+        elapsedSeconds = percentage * duration
+        let targetTime = CMTime(seconds: percentage * duration, preferredTimescale: 600)
         player.seek(to: targetTime)
     }
     
@@ -102,13 +126,27 @@ final class AudioEngine {
     func addTracksToQueue(_ tracks: [Track]) {
         queue.append(contentsOf: tracks)
     }
+    func skipToQueueIndex(_ index: Int) {
+        guard index > 0, index < queue.count else { return }
+        queue.removeFirst(index)
+        if let track = queue.first {
+            loadAndPlay(track: track)
+        }
+    }
     
     // MARK: - Private Loading Logic
 
     private func loadAndPlay(track: Track) {
+        // Finalize whatever was playing before this call as a skip (a no-op if
+        // it never crossed the engagement threshold, or nothing was playing).
+        finalizeHistorySession(wasSkipped: true)
+        historySession = HistorySession(track: track)
+
         currentTrack = track
         duration = Double(track.durationSeconds)
         playbackProgress = 0.0
+        elapsedSeconds = 0.0
+        hasAdvancedForCurrentTrack = false
         currentLyricsBrowseId = nil
         isLoadingStream = true
 
@@ -157,35 +195,70 @@ final class AudioEngine {
         }
     }
 
-    private func populateQueueFromServer(videoId: String) async {
+    private func populateQueueFromServer(videoId: String, attempt: Int = 0) async {
         do {
             let playlist = try await APIClient.shared.getNextSongs(videoId: videoId)
             let tracks = playlist.tracks.compactMap { next -> Track? in
-                // Skip the current track if it appears first in the watch playlist
                 guard next.videoId != videoId else { return nil }
                 return next.toTrack()
             }
             await MainActor.run {
                 self.currentLyricsBrowseId = playlist.lyrics
                 guard let current = self.queue.first else { return }
-                // Only populate server queue if the user hasn't manually added tracks yet
                 if self.queue.count == 1 {
                     self.queue = [current] + tracks
                 }
             }
         } catch {
-            // Non-fatal: queue stays with the current track only
+            guard attempt == 0, currentTrack?.videoId == videoId else {
+                print("[AudioEngine] Queue population failed for \(videoId): \(error)")
+                return
+            }
+            print("[AudioEngine] Queue population failed, retrying in 2s: \(error)")
+            try? await Task.sleep(for: .seconds(2))
+            await populateQueueFromServer(videoId: videoId, attempt: 1)
         }
     }
     
     // MARK: - Observers
     private func addPlayerObservers() {
+        // Sync our play/pause state when the system interrupts us (e.g.
+        // another app starts playing audio/video). iOS pauses playback for
+        // us automatically, but without this our own `isPlaying` goes stale
+        // and the play/pause button keeps showing "pause" even though
+        // nothing is actually playing.
+        NotificationCenter.default.addObserver(
+            forName: AVAudioSession.interruptionNotification,
+            object: AVAudioSession.sharedInstance(),
+            queue: .main
+        ) { [weak self] notification in
+            guard let self,
+                  let typeValue = notification.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt,
+                  let type = AVAudioSession.InterruptionType(rawValue: typeValue),
+                  type == .began,
+                  self.isPlaying
+            else { return }
+            self.pause()
+        }
+
         // Observe playback progress
         let interval = CMTime(seconds: 0.5, preferredTimescale: CMTimeScale(NSEC_PER_SEC))
         timeObserverToken = player.addPeriodicTimeObserver(forInterval: interval, queue: .main) { [weak self] time in
-            guard let self = self, self.duration > 0 else { return }
+            guard let self = self, self.duration > 0, !self.isLoadingStream else { return }
             self.playbackProgress = time.seconds / self.duration
+            self.elapsedSeconds = time.seconds
             self.updateNowPlayingPlaybackTime()
+            self.updateHistorySessionProgress(elapsedSeconds: time.seconds)
+
+            // The HLS-cached stream can run longer than the track's known
+            // duration (trailing silence left over from transcoding), so
+            // AVPlayerItemDidPlayToEndTime below can fire much later than
+            // expected — or effectively never advance in a reasonable time.
+            // Don't wait on it exclusively: advance as soon as we've reached
+            // the track's real, known duration.
+            if !self.hasAdvancedForCurrentTrack, time.seconds >= self.duration {
+                self.advanceToNextTrack()
+            }
         }
 
         // Observe when a song ends
@@ -194,18 +267,26 @@ final class AudioEngine {
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            self?.skipToNext()
+            self?.advanceToNextTrack()
         }
 
-        // Surface item-level load failures (e.g. rejected CDN URL, unsupported format)
-        player.publisher(for: \.currentItem)
+        // Observe item status changes for both successful loads and failures
+        // Note: duration is intentionally left as the static track metadata value
+        // (set in loadAndPlay) and never overwritten from the player item — the
+        // HLS-proxied stream's reported duration doesn't always match the true
+        // song length, which was causing playback to appear padded with silence.
+        let itemStatusPublisher = player.publisher(for: \.currentItem)
             .map { item -> AnyPublisher<AVPlayerItem.Status, Never> in
                 guard let item else { return Just(.unknown).eraseToAnyPublisher() }
                 return item.publisher(for: \.status).eraseToAnyPublisher()
             }
             .switchToLatest()
-            .filter { $0 == .failed }
             .receive(on: DispatchQueue.main)
+            .share()
+
+        // Surface load failures
+        itemStatusPublisher
+            .filter { $0 == .failed }
             .sink { [weak self] _ in
                 guard let self else { return }
                 let error = player.currentItem?.error
@@ -225,7 +306,72 @@ final class AudioEngine {
             }
             .store(in: &cancellables)
     }
-    
+
+    /// Ends the current track's session and moves to the next one. Guarded so
+    /// it only runs once per track, since both the "reached known duration"
+    /// tick check and AVPlayerItemDidPlayToEndTime can trigger this.
+    private func advanceToNextTrack() {
+        guard !hasAdvancedForCurrentTrack else { return }
+        hasAdvancedForCurrentTrack = true
+
+        // A track that reached its end is unambiguously a real listen,
+        // regardless of whether the periodic tick happened to cross the
+        // engagement threshold in time (very short tracks).
+        if historySession != nil {
+            historySession?.maxElapsedSeconds = duration
+            historySession?.metThreshold = true
+        }
+        finalizeHistorySession(wasSkipped: false)
+        skipToNext()
+    }
+
+    // MARK: - Play History
+
+    // Require at least 30s of listening, or half the track for anything
+    // shorter, before a play counts — filters out accidental taps/skips.
+    private func engagementThreshold(for duration: Double) -> Double {
+        min(30, duration * 0.5)
+    }
+
+    private func updateHistorySessionProgress(elapsedSeconds: Double) {
+        // Read into a local copy and write back once — reading and writing
+        // `historySession` within the same statement (e.g. via `?.` chaining
+        // on both sides) is an exclusivity violation under Observation's
+        // access-tracked accessors and crashes at runtime.
+        guard var session = historySession else { return }
+        session.maxElapsedSeconds = max(session.maxElapsedSeconds, elapsedSeconds)
+        if !session.metThreshold, elapsedSeconds >= engagementThreshold(for: duration) {
+            session.metThreshold = true
+        }
+        historySession = session
+    }
+
+    private func finalizeHistorySession(wasSkipped: Bool) {
+        guard let session = historySession, session.metThreshold else {
+            historySession = nil
+            return
+        }
+        historySession = nil
+
+        let track = session.track
+        let trackDuration = Double(track.durationSeconds)
+        let completionRate = trackDuration > 0 ? min(1.0, session.maxElapsedSeconds / trackDuration) : 0
+        let playedSeconds = Int(session.maxElapsedSeconds.rounded())
+
+        Task {
+            do {
+                try await APIClient.shared.recordPlay(
+                    videoId: track.videoId,
+                    playedDurationSeconds: playedSeconds,
+                    completionRate: completionRate,
+                    wasSkipped: wasSkipped
+                )
+            } catch {
+                print("[AudioEngine] Failed to record play history for \(track.videoId): \(error)")
+            }
+        }
+    }
+
     private func removeTimeObserver() {
         if let token = timeObserverToken {
             player.removeTimeObserver(token)

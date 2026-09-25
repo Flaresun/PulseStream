@@ -1,52 +1,62 @@
 import SwiftUI
 
+private enum CenterContent { case artwork, lyrics, queue }
+
 struct NowPlayingView: View {
     @SwiftUI.Environment(AudioEngine.self) private var audioEngine
     @SwiftUI.Environment(\.dismiss) private var dismiss
 
-    // Non-nil only while the user is actively dragging the scrubber
     @State private var scrubPosition: Double? = nil
-    @State private var showLyrics = false
+    @State private var centerContent: CenterContent = .artwork
 
     private var displayProgress: Double {
         scrubPosition ?? audioEngine.playbackProgress
     }
 
-    private var elapsedTime: String {
-        formatTime(displayProgress * audioEngine.duration)
+    // Static per-track duration from metadata — not audioEngine.duration, which
+    // only reflects the currently loaded player item and can misreport the true
+    // song length for HLS-proxied streams.
+    private var trackDuration: Double {
+        Double(audioEngine.currentTrack?.durationSeconds ?? 0)
     }
 
-    private var remainingTime: String {
-        "-" + formatTime((1 - displayProgress) * audioEngine.duration)
+    private var elapsedTime: String {
+        formatTime(displayProgress * trackDuration)
+    }
+
+    private var endTime: String {
+        formatTime(trackDuration)
     }
 
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
-                // Center content — artwork or lyrics, fills available space
                 ZStack {
-                    if showLyrics {
-                        LyricsView()
-                            .transition(.opacity)
-                    } else {
-                        artworkView
-                            .transition(.opacity)
+                    switch centerContent {
+                    case .artwork:
+                        artworkView.transition(.opacity)
+                    case .lyrics:
+                        LyricsView().transition(.opacity)
+                    case .queue:
+                        QueueView().transition(.opacity)
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-                // Fixed controls section
                 VStack(spacing: 20) {
                     trackInfo
                     scrubber
                     controls
-                    lyricsToggle
+                    contentToggles
                 }
                 .padding(.horizontal, 8)
                 .padding(.bottom, 32)
             }
             .padding(.horizontal, 24)
             .navigationBarTitleDisplayMode(.inline)
+            .onChange(of: audioEngine.currentTrack?.videoId) { _, _ in
+                scrubPosition = nil
+            }
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     Button {
@@ -78,7 +88,6 @@ struct NowPlayingView: View {
         .clipShape(RoundedRectangle(cornerRadius: 16))
         .shadow(color: .black.opacity(0.3), radius: 24, y: 12)
         .padding(.vertical, 24)
-        // Artwork shrinks slightly when paused — mimics Apple Music behaviour
         .scaleEffect(audioEngine.isPlaying ? 1.0 : 0.92)
         .animation(.spring(duration: 0.4), value: audioEngine.isPlaying)
     }
@@ -115,7 +124,7 @@ struct NowPlayingView: View {
             HStack {
                 Text(elapsedTime)
                 Spacer()
-                Text(remainingTime)
+                Text(endTime)
             }
             .font(.caption)
             .foregroundStyle(.secondary)
@@ -126,8 +135,8 @@ struct NowPlayingView: View {
     private var controls: some View {
         HStack(spacing: 48) {
             Button {
-                // Seek to start; a proper "previous" history stack comes later
                 audioEngine.seek(to: 0)
+                if !audioEngine.isPlaying { audioEngine.play() }
             } label: {
                 Image(systemName: "backward.fill")
                     .font(.system(size: 26))
@@ -156,29 +165,47 @@ struct NowPlayingView: View {
         .tint(.primary)
     }
 
-    private var lyricsToggle: some View {
-        Button {
-            withAnimation(.easeInOut(duration: 0.25)) {
-                showLyrics.toggle()
+    private var contentToggles: some View {
+        HStack(spacing: 12) {
+            togglePill(
+                "LYRICS",
+                active: centerContent == .lyrics,
+                disabled: audioEngine.currentLyricsBrowseId == nil
+            ) {
+                withAnimation(.easeInOut(duration: 0.25)) {
+                    centerContent = centerContent == .lyrics ? .artwork : .lyrics
+                }
             }
-        } label: {
-            Text("LYRICS")
+            togglePill("QUEUE", active: centerContent == .queue) {
+                withAnimation(.easeInOut(duration: 0.25)) {
+                    centerContent = centerContent == .queue ? .artwork : .queue
+                }
+            }
+        }
+    }
+
+    private func togglePill(
+        _ label: String,
+        active: Bool,
+        disabled: Bool = false,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Text(label)
                 .font(.caption.weight(.bold))
                 .padding(.horizontal, 14)
                 .padding(.vertical, 7)
-                .background(showLyrics ? Color.primary : Color.secondary.opacity(0.12))
-                .foregroundStyle(showLyrics ? Color(uiColor: .systemBackground) : .secondary)
+                .background(active ? Color.primary : Color.secondary.opacity(0.12))
+                .foregroundStyle(active ? Color(uiColor: .systemBackground) : Color.secondary)
                 .clipShape(Capsule())
         }
-        .disabled(audioEngine.currentLyricsBrowseId == nil)
+        .disabled(disabled)
     }
 
     // MARK: - Helpers
 
     private func formatTime(_ seconds: Double) -> String {
         let total = max(0, Int(seconds))
-        let m = total / 60
-        let s = total % 60
-        return String(format: "%d:%02d", m, s)
+        return String(format: "%d:%02d", total / 60, total % 60)
     }
 }

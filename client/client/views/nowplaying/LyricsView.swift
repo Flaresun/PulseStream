@@ -33,7 +33,7 @@ struct LyricsView: View {
             fetchedBrowseId = nil
             Task { await fetchLyrics(browseId: newId) }
         }
-        .onChange(of: audioEngine.playbackProgress) { _, _ in
+        .onChange(of: audioEngine.elapsedSeconds) { _, _ in
             updateCurrentLine()
         }
     }
@@ -43,16 +43,19 @@ struct LyricsView: View {
     private func syncedLyricsView(_ songLyrics: SongLyrics) -> some View {
         ScrollViewReader { proxy in
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 20) {
-                    ForEach(Array(songLyrics.lyrics.enumerated()), id: \.element.id) { index, line in
+                // VStack (not LazyVStack) so every row is in the layout tree and
+                // scrollTo can target any line immediately, including on first appear.
+                VStack(alignment: .leading, spacing: 20) {
+                    ForEach(songLyrics.lyrics.indices, id: \.self) { index in
+                        let line = songLyrics.lyrics[index]
+                        let isActive = index == currentLineIndex
                         Text(line.text)
-                            .font(index == currentLineIndex ? .title3.weight(.bold) : .body)
-                            .foregroundStyle(index == currentLineIndex ? .primary : .secondary)
-                            .opacity(index == currentLineIndex ? 1.0 : 0.45)
+                            .font(isActive ? .title2.weight(.heavy) : .body)
+                            .foregroundStyle(isActive ? Color.primary : Color.secondary)
+                            .opacity(isActive ? 1.0 : 0.45)
                             .id(line.id)
                             .animation(.easeInOut(duration: 0.2), value: currentLineIndex)
                     }
-                    // Bottom padding so the last line can scroll to center
                     Color.clear.frame(height: 120)
                 }
                 .padding(.horizontal)
@@ -64,7 +67,6 @@ struct LyricsView: View {
                     proxy.scrollTo(songLyrics.lyrics[newIndex].id, anchor: .center)
                 }
             }
-            // Scroll to current position without animation when lyrics first load
             .onAppear {
                 guard currentLineIndex < songLyrics.lyrics.count else { return }
                 proxy.scrollTo(songLyrics.lyrics[currentLineIndex].id, anchor: .center)
@@ -76,9 +78,12 @@ struct LyricsView: View {
 
     private func updateCurrentLine() {
         guard let lyrics else { return }
-        let currentTimeMs = audioEngine.playbackProgress * audioEngine.duration * 1000
+        // ytmusicapi returns start_time in milliseconds — read elapsed time
+        // directly off the engine (not derived via playbackProgress * duration)
+        // so lyric sync tracks the actual playback clock precisely.
+        let currentMs = audioEngine.elapsedSeconds * 1000
         let newIndex = lyrics.lyrics.indices.last(where: {
-            Double(lyrics.lyrics[$0].startTime) <= currentTimeMs
+            Double(lyrics.lyrics[$0].startTime) <= currentMs
         }) ?? 0
         if newIndex != currentLineIndex {
             currentLineIndex = newIndex
