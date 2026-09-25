@@ -48,10 +48,29 @@ class StaticMusicAPI:
         """
         if not songId:
             return None
-        raw_lyrics = self.ytmusic.get_lyrics(songId, True)
+        try:
+            raw_lyrics = self.ytmusic.get_lyrics(songId, True)
+        except Exception:
+            # ytmusicapi's timed-lyrics parser can raise (e.g. missing "cueRange")
+            # on malformed upstream data; treat as "no lyrics available".
+            return None
         if not raw_lyrics:
             return None
-        return SongLyrics.model_validate(raw_lyrics)
+        raw_lines = raw_lyrics.get("lyrics", [])
+        normalized_lines = [
+            line if isinstance(line, dict) else {
+                "text": line.text,
+                "start_time": line.start_time,
+                "end_time": line.end_time,
+                "id": line.id,
+            }
+            for line in raw_lines
+        ] if isinstance(raw_lines, list) else []
+        return SongLyrics.model_validate({
+            "lyrics": normalized_lines,
+            "source": raw_lyrics.get("source") or "",
+            "hasTimestamps": raw_lyrics.get("hasTimestamps", True),
+        })
 
     def getSearchSuggestions(self, search: str) -> Optional[List[str]]:
         if not search:

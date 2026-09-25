@@ -136,5 +136,15 @@ ON tracks (s3_status);
 CREATE INDEX idx_tracks_album_id 
 ON tracks (album_id);
 
-CREATE INDEX idx_track_artists_artist_id 
+CREATE INDEX idx_track_artists_artist_id
 ON track_artists (artist_id);
+
+-- ==========================================
+-- 6. SINGLE-USER STUB
+-- ==========================================
+-- This app has no auth/multi-tenancy yet. Every play and history record is
+-- attributed to this one seeded row (fixed id so app code can reference it
+-- as a constant) until real accounts exist.
+INSERT INTO users (id, email, password_hash)
+VALUES ('00000000-0000-0000-0000-000000000001', 'local@device.internal', 'unused')
+ON CONFLICT (id) DO NOTHING;

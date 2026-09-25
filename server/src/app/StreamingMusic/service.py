@@ -49,7 +49,6 @@ class StreamingMusicAPI:
                     'quiet': True,
                     'no_warnings': True,
                     'remote_components': 'ejs:github',
-                    #'cookiefile': '/app/ytdlp_cookies.txt',
                     'extractor_args': {'youtube': ['player_client=default,web_embedded,-tv_downgraded']}
                 }
 
@@ -95,11 +94,9 @@ class StreamingMusicAPI:
 
         # 2. CASE A: Song is READY in S3
         if current_status == "READY" and track.get("s3_key"):
-            # Return the server-side HLS proxy URL instead of a bare presigned manifest URL.
-            # The manifest references segments with relative paths; if the client resolves
-            # those against the presigned manifest URL the signature is stripped and S3
-            # returns 403.  The proxy endpoint rewrites every segment line to its own
-            # presigned URL before sending the manifest to AVPlayer.
+            # Return the server-side HLS proxy URL.  The proxy endpoint fetches
+            # playlist.m3u8 from S3 and rewrites each segment line to a server-proxy
+            # URL (/stream/hls/{id}/{segment}), so AVPlayer never contacts S3 directly.
             if request is not None:
                 base = str(request.base_url).rstrip("/")
                 stream_url = f"{base}/api/v1/stream/hls/{youtube_id}/playlist.m3u8"

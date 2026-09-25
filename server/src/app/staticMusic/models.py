@@ -23,15 +23,15 @@ class Song(BaseModel):
     category: str
     resultType: str
     title: str
-    album: Album
+    album: Optional[Album] = None
     inLibrary: bool
     pinnedToListenAgain: bool
     videoId: str
-    videoType: str
-    duration: str
-    artists: List[Artist]
-    duration_seconds: int
-    views: str
+    videoType: Optional[str] = None
+    duration: Optional[str] = None
+    artists: List[Artist] = []
+    duration_seconds: Optional[int] = None
+    views: Optional[str] = None
     isExplicit: bool
     thumbnails: List[Thumbnail]
     year: Optional[int] = None
@@ -61,7 +61,7 @@ class FeedbackTokens(BaseModel):
 class Track(BaseModel):
     videoId: str
     title: str
-    artists: List[Artist]
+    artists: Optional[List[Artist]] = None
     album: str
     likeStatus: str
     inLibrary: bool
@@ -74,7 +74,7 @@ class Track(BaseModel):
     trackNumber: int
     duration: str
     duration_seconds: int
-    creditsBrowseId: str
+    creditsBrowseId: Optional[str] = None
     thumbnails: Optional[List[Thumbnail]] = None
     communityVoteStatus: Optional[str] = None
 
@@ -83,10 +83,10 @@ class AlbumVersion(BaseModel):
     title: str
     artists: List[Artist]
     browseId: str
-    audioPlaylistId: str
+    audioPlaylistId: Optional[str] = None
     thumbnails: List[Thumbnail]
     isExplicit: bool
-    type: str
+    type: Optional[str] = None
 
 
 class AlbumDetails(BaseModel):
@@ -96,11 +96,11 @@ class AlbumDetails(BaseModel):
     isExplicit: bool
     description: str
     descriptionRuns: List[DescriptionRun]
-    year: str
-    artists: List[Artist]
-    trackCount: int
+    year: Optional[str] = None
+    artists: Optional[List[Artist]] = None
+    trackCount: Optional[int] = None
     duration: str
-    audioPlaylistId: str
+    audioPlaylistId: Optional[str] = None
     likeStatus: str
     tracks: List[Track]
     duration_seconds: int
@@ -116,12 +116,12 @@ class AlbumRef(BaseModel):
 class TrackResult(BaseModel):
     videoId: str
     title: str
-    length: str
+    length: Optional[str] = None
     thumbnail: List[Thumbnail]
-    videoType: str
+    videoType: Optional[str] = None
     inLibrary: bool
     pinnedToListenAgain: bool
-    artists: List[Artist]
+    artists: List[Artist] = []
     album: Optional[AlbumRef] = None
     year: Optional[str] = None
     likeStatus: Optional[str] = None
@@ -131,7 +131,7 @@ class TrackResult(BaseModel):
 
 class PlaylistTracks(BaseModel):
     tracks: List[TrackResult]
-    playlistId: str
+    playlistId: Optional[str] = None
     lyrics: Optional[str] = None
     related: Optional[str] = None
 

@@ -86,7 +86,7 @@ async def init_db():
             if not schema_exists:
                 logger.info("Initializing database schema from schema.sql...")
                 schema_path = Path(__file__).parent / "schema.sql"
-                
+
                 if not schema_path.exists():
                     logger.error(f"schema.sql not found at {schema_path}")
                     raise FileNotFoundError(f"schema.sql missing at {schema_path}")
@@ -97,6 +97,17 @@ async def init_db():
                 logger.info("Database schema initialized successfully.")
             else:
                 logger.info("Database schema already exists. Skipping schema execution.")
+
+            # Ensure the single-user stub exists even on a DB that already had the
+            # schema applied before this row was added to schema.sql.
+            await cur.execute(
+                """
+                INSERT INTO users (id, email, password_hash)
+                VALUES ('00000000-0000-0000-0000-000000000001', 'local@device.internal', 'unused')
+                ON CONFLICT (id) DO NOTHING;
+                """
+            )
+            await conn.commit()
 
 
 async def close_db():
