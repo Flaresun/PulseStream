@@ -28,6 +28,12 @@ struct NowPlayingView: View {
         formatTime(trackDuration)
     }
 
+    // READY means the track finished caching to S3 and is being served from
+    // our own storage, so it'll replay instantly and won't hit YouTube again.
+    private var isCached: Bool {
+        audioEngine.cacheStatus == .ready
+    }
+
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
@@ -86,10 +92,19 @@ struct NowPlayingView: View {
                 .aspectRatio(1, contentMode: .fit)
         }
         .clipShape(RoundedRectangle(cornerRadius: 16))
+        // Neon blue border once the track is fully cached in S3 — i.e. it's
+        // streaming from our own storage and will replay instantly.
+        .overlay(
+            RoundedRectangle(cornerRadius: 16)
+                .strokeBorder(Color.neonBlue, lineWidth: isCached ? 3 : 0)
+                .shadow(color: Color.neonBlue.opacity(isCached ? 0.9 : 0), radius: 10)
+                .shadow(color: Color.neonBlue.opacity(isCached ? 0.5 : 0), radius: 22)
+        )
         .shadow(color: .black.opacity(0.3), radius: 24, y: 12)
         .padding(.vertical, 24)
         .scaleEffect(audioEngine.isPlaying ? 1.0 : 0.92)
         .animation(.spring(duration: 0.4), value: audioEngine.isPlaying)
+        .animation(.easeInOut(duration: 0.35), value: isCached)
     }
 
     private var trackInfo: some View {

@@ -18,6 +18,10 @@ final class AudioEngine {
     // back-deriving elapsed time via `playbackProgress * duration`.
     var elapsedSeconds: Double = 0.0
 
+    // S3 cache state for the current track. READY means it's fully cached and
+    // streaming from our own S3-backed HLS endpoint rather than YouTube's CDN.
+    var cacheStatus: S3Status? = nil
+
     // The Logical Queue
     var queue: [Track] = []
     var isLoopingCurrentTrack: Bool = false
@@ -147,6 +151,7 @@ final class AudioEngine {
         playbackProgress = 0.0
         elapsedSeconds = 0.0
         hasAdvancedForCurrentTrack = false
+        cacheStatus = nil
         currentLyricsBrowseId = nil
         isLoadingStream = true
 
@@ -173,6 +178,7 @@ final class AudioEngine {
 
             let playerItem = AVPlayerItem(url: streamURL)
             await MainActor.run {
+                self.cacheStatus = response.s3Status
                 self.player.replaceCurrentItem(with: playerItem)
                 self.isLoadingStream = false
                 self.play()

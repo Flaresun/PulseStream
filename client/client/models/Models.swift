@@ -1,4 +1,5 @@
 import Foundation
+import SwiftUI
 
 // MARK: - Enums
 enum S3Status: String, Codable {
@@ -264,4 +265,11 @@ struct HomeResponse: Codable {
     let forgottenFavorites: [HomeSong]
     let quickPicks: [HomeSong]
     let explore: [HomeSong]
+}
+
+// MARK: - Theme
+
+extension Color {
+    /// Used to mark tracks that are fully cached in S3.
+    static let neonBlue = Color(red: 0.25, green: 0.78, blue: 1.0)
 }
