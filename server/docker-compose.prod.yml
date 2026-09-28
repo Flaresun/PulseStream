@@ -1,0 +1,15 @@
+services:
+  server:
+    build: .
+    container_name: server
+    restart: always
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./ytdlp_cookies.txt:/app/ytdlp_cookies.txt
+    env_file:
+      - .env
+    environment:
+      - PYTHONUNBUFFERED=1
+    # No --reload here (that's a local-dev convenience) and no local `db`
+    # service — DATABASE_URL in .env points at Neon instead.
