@@ -61,6 +61,7 @@ class StreamingMusicAPI:
         cookies_path = Path("/app/ytdlp_cookies.txt")
         if cookies_path.exists():
             self.ydl_opts['cookiefile'] = str(cookies_path)
+            logger.info(f"Using yt-dlp cookies from {cookies_path} (mtime={cookies_path.stat().st_mtime}).")
         else:
             logger.warning(
                 "ytdlp_cookies.txt not found — proceeding without cookies. "
