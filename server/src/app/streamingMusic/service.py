@@ -88,14 +88,60 @@ class StreamingMusicAPI:
         # param), so fetching them from a different IP than the one that
         # requested them gets rejected. Budget ~5MB of proxy traffic per song;
         # S3 caches it permanently afterward, so each song only costs once.
-        proxy_url = os.getenv("YTDLP_PROXY", "").strip()
-        if proxy_url:
-            self.ydl_opts['proxy'] = proxy_url
+        # A "{session}" placeholder in the URL is replaced with a random token
+        # per attempt. That pins one exit IP for the duration of a single
+        # operation (extract + download must share an IP, or YouTube 403s the
+        # IP-locked stream URL) while still landing retries on a *different*
+        # exit node — which matters because the previous one is usually dead.
+        # Keeping it a placeholder rather than hardcoding a provider's syntax
+        # means this works with any provider's sticky-session format.
+        self._proxy_template = os.getenv("YTDLP_PROXY", "").strip()
+        if self._proxy_template:
             # Log only the host:port — the URL embeds credentials.
-            safe_host = proxy_url.rsplit("@", 1)[-1]
-            logger.info(f"yt-dlp routing through proxy at {safe_host}")
+            safe_host = self._proxy_template.rsplit("@", 1)[-1]
+            rotating = "{session}" in self._proxy_template
+            logger.info(
+                f"yt-dlp routing through proxy at {safe_host} "
+                f"(per-attempt sessions: {'on' if rotating else 'OFF — add {session} to YTDLP_PROXY'})"
+            )
         else:
             logger.info("yt-dlp proxy not configured (YTDLP_PROXY unset) — connecting directly.")
+
+    def _build_ydl_opts(self, **overrides) -> Dict[str, Any]:
+        """Fresh opts with a new proxy session, so each attempt gets its own exit IP."""
+        opts = dict(self.ydl_opts)
+        if self._proxy_template:
+            opts['proxy'] = self._proxy_template.replace('{session}', uuid.uuid4().hex[:12])
+        opts.update(overrides)
+        return opts
+
+    async def _run_ytdlp_with_retries(self, fn: Callable[[dict], Any], what: str,
+                                      attempts: int = 3, **opt_overrides) -> Any:
+        """
+        Runs a blocking yt-dlp call with retries, each on a fresh proxy session.
+
+        Residential proxy exit nodes are consumer devices that drop offline
+        routinely ("502 NO_HOST_CONNECTION" and friends), so transient failures
+        are expected rather than exceptional. Retrying on the *same* sticky
+        session would just keep hitting the same dead node, hence the new
+        session per attempt via _build_ydl_opts.
+        """
+        last_error = None
+        for attempt in range(1, attempts + 1):
+            opts = self._build_ydl_opts(**opt_overrides)
+            try:
+                return await asyncio.to_thread(fn, opts)
+            except Exception as e:
+                last_error = e
+                if attempt < attempts:
+                    delay = 2 ** (attempt - 1)
+                    logger.warning(
+                        f"{what}: attempt {attempt}/{attempts} failed ({e}); retrying in {delay}s"
+                    )
+                    await asyncio.sleep(delay)
+                else:
+                    logger.error(f"{what}: all {attempts} attempts failed. Last error: {e}")
+        raise RuntimeError(f"{what} failed after {attempts} attempts: {last_error}") from last_error
 
     async def get_track_status(self, youtube_id: str) -> dict:
         """
@@ -242,14 +288,13 @@ class StreamingMusicAPI:
         Extracts just the fast CDN URL without parsing full metadata.
         """
         youtube_url = f"{self.youtube_base_url}{youtube_id}"
-        
 
-        def _extract():
-            with yt_dlp.YoutubeDL(self.ydl_opts) as ydl:
+        def _extract(opts):
+            with yt_dlp.YoutubeDL(opts) as ydl:
                 info = ydl.extract_info(youtube_url, download=False)
                 return info.get('url')
 
-        return await asyncio.to_thread(_extract)
+        return await self._run_ytdlp_with_retries(_extract, what=f"CDN URL for {youtube_id}")
 
     async def process_and_upload_hls(self, youtube_id: str, s3_key_prefix: str) -> None:
         """
@@ -475,27 +520,32 @@ class StreamingMusicAPI:
         Downloads the best audio stream using yt-dlp natively.
         Returns a tuple: (Path to downloaded file, target audio bitrate in kbps).
         """
-        def _download():
-            ydl_opts = self.ydl_opts.copy()
-            ydl_opts["outtmpl"] = str(job_dir / 'raw_audio.%(ext)s')
-            
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        def _download(opts):
+            with yt_dlp.YoutubeDL(opts) as ydl:
                 info = ydl.extract_info(youtube_url, download=True)
-                
+
                 # Determine the exact file extension yt-dlp decided to use
                 ext = info.get('ext', 'webm')
                 downloaded_file = job_dir / f"raw_audio.{ext}"
-                
+
                 if not downloaded_file.exists():
                     raise FileNotFoundError("yt-dlp finished but the raw audio file was not found.")
 
                 # Extract source audio bitrate (abr). Fallback to 192k if YouTube doesn't report it.
                 abr = info.get('abr')
                 target_abr = int(abr) if abr else 192
-                
+
                 return downloaded_file, target_abr
 
-        return await asyncio.to_thread(_download)
+        return await self._run_ytdlp_with_retries(
+            _download,
+            what=f"download {youtube_url}",
+            outtmpl=str(job_dir / 'raw_audio.%(ext)s'),
+            # Don't resume a partial file from a previous attempt: each retry
+            # runs on a different exit IP with a freshly-issued stream URL, so
+            # resuming against the old one would fail.
+            continuedl=False,
+        )
 
     async def _transcode_to_hls(self, raw_audio_path: Path, job_dir: Path, target_abr: int) -> Path:
         """
