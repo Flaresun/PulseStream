@@ -78,6 +78,25 @@ class StreamingMusicAPI:
         else:
             logger.info("yt-dlp cookies disabled (YTDLP_USE_COOKIES not set to true).")
 
+        # Residential proxy. YouTube blocks datacenter IPs (AWS etc.) at the
+        # player-request stage regardless of client or cookies, so the only
+        # reliable fix is egressing from a residential IP. Unset locally, which
+        # means local dev keeps going direct.
+        #
+        # Note this proxies the media download too, not just metadata — the
+        # googlevideo URLs YouTube hands back are IP-locked (they embed an `ip=`
+        # param), so fetching them from a different IP than the one that
+        # requested them gets rejected. Budget ~5MB of proxy traffic per song;
+        # S3 caches it permanently afterward, so each song only costs once.
+        proxy_url = os.getenv("YTDLP_PROXY", "").strip()
+        if proxy_url:
+            self.ydl_opts['proxy'] = proxy_url
+            # Log only the host:port — the URL embeds credentials.
+            safe_host = proxy_url.rsplit("@", 1)[-1]
+            logger.info(f"yt-dlp routing through proxy at {safe_host}")
+        else:
+            logger.info("yt-dlp proxy not configured (YTDLP_PROXY unset) — connecting directly.")
+
     async def get_track_status(self, youtube_id: str) -> dict:
         """
         Returns a dictionary shaped for the TrackStatusResponse Pydantic model.
