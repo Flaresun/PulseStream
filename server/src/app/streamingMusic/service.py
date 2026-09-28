@@ -52,6 +52,21 @@ class StreamingMusicAPI:
                     'extractor_args': {'youtube': ['player_client=default,web_embedded,-tv_downgraded']}
                 }
 
+        # Datacenter IPs (AWS, GCP, etc.) get hit with YouTube's "confirm
+        # you're not a bot" challenge far more aggressively than residential
+        # IPs. Authenticating yt-dlp with a real session's cookies is the
+        # standard mitigation — this file is mounted in via docker-compose
+        # but was never actually wired into ydl_opts, so it silently did
+        # nothing. Degrade gracefully if it isn't present rather than error.
+        cookies_path = Path("/app/ytdlp_cookies.txt")
+        if cookies_path.exists():
+            self.ydl_opts['cookiefile'] = str(cookies_path)
+        else:
+            logger.warning(
+                "ytdlp_cookies.txt not found — proceeding without cookies. "
+                "YouTube is more likely to block requests from this IP without them."
+            )
+
     async def get_track_status(self, youtube_id: str) -> dict:
         """
         Returns a dictionary shaped for the TrackStatusResponse Pydantic model.
