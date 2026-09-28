@@ -49,7 +49,11 @@ class StreamingMusicAPI:
                     'quiet': True,
                     'no_warnings': True,
                     'remote_components': 'ejs:github',
-                    'extractor_args': {'youtube': ['player_client=default,web_embedded,-tv_downgraded']}
+                    # web/web_embedded are where YouTube's PO-token bot-check bites
+                    # hardest on datacenter IPs (see the AWS "sign in to confirm
+                    # you're not a bot" issue). `tv` uses a simpler device-flow auth
+                    # path that commonly sidesteps it — swapped in as an experiment.
+                    'extractor_args': {'youtube': ['player_client=default,tv,-tv_downgraded']}
                 }
 
         # Datacenter IPs (AWS, GCP, etc.) get hit with YouTube's "confirm
