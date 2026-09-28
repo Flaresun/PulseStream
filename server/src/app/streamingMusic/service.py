@@ -42,6 +42,18 @@ class StreamingMusicAPI:
         )
 
         self.youtube_base_url = "https://www.youtube.com/watch?v="
+
+        # Both of these are env-configurable so the YouTube bot-detection
+        # workarounds can be A/B tested on a deployed host by editing .env and
+        # restarting, without needing a full image rebuild.
+        #
+        # Default clients are visionos/android_vr: neither requires a PO token,
+        # neither needs the JS player, and neither sends cookies. That's the
+        # smallest possible request footprint for YouTube to fingerprint, which
+        # is what matters on a datacenter IP where the web_* clients get
+        # challenged with "Sign in to confirm you're not a bot".
+        player_clients = os.getenv("YTDLP_PLAYER_CLIENTS", "visionos,android_vr")
+
         self.ydl_opts = {
                     # Prefer AAC in an m4a container — the only audio format AVPlayer
                     # supports natively on iOS.  WebM/Opus (itag 251) must be avoided.
@@ -49,28 +61,22 @@ class StreamingMusicAPI:
                     'quiet': True,
                     'no_warnings': True,
                     'remote_components': 'ejs:github',
-                    # web/web_embedded are where YouTube's PO-token bot-check bites
-                    # hardest on datacenter IPs (see the AWS "sign in to confirm
-                    # you're not a bot" issue). `tv` uses a simpler device-flow auth
-                    # path that commonly sidesteps it — swapped in as an experiment.
-                    'extractor_args': {'youtube': ['player_client=default,tv,-tv_downgraded']}
+                    'extractor_args': {'youtube': [f'player_client={player_clients}']}
                 }
+        logger.info(f"yt-dlp player_client={player_clients}")
 
-        # Datacenter IPs (AWS, GCP, etc.) get hit with YouTube's "confirm
-        # you're not a bot" challenge far more aggressively than residential
-        # IPs. Authenticating yt-dlp with a real session's cookies is the
-        # standard mitigation — this file is mounted in via docker-compose
-        # but was never actually wired into ydl_opts, so it silently did
-        # nothing. Degrade gracefully if it isn't present rather than error.
-        cookies_path = Path("/app/ytdlp_cookies.txt")
-        if cookies_path.exists():
-            self.ydl_opts['cookiefile'] = str(cookies_path)
-            logger.info(f"Using yt-dlp cookies from {cookies_path} (mtime={cookies_path.stat().st_mtime}).")
+        # Off by default: the clients above ignore cookies anyway, and sending
+        # account cookies from a datacenter IP is itself a bot signal (and risks
+        # the account). Set YTDLP_USE_COOKIES=true to re-enable.
+        if os.getenv("YTDLP_USE_COOKIES", "false").lower() == "true":
+            cookies_path = Path("/app/ytdlp_cookies.txt")
+            if cookies_path.exists():
+                self.ydl_opts['cookiefile'] = str(cookies_path)
+                logger.info(f"Using yt-dlp cookies from {cookies_path} (mtime={cookies_path.stat().st_mtime}).")
+            else:
+                logger.warning("YTDLP_USE_COOKIES=true but ytdlp_cookies.txt not found — proceeding without cookies.")
         else:
-            logger.warning(
-                "ytdlp_cookies.txt not found — proceeding without cookies. "
-                "YouTube is more likely to block requests from this IP without them."
-            )
+            logger.info("yt-dlp cookies disabled (YTDLP_USE_COOKIES not set to true).")
 
     async def get_track_status(self, youtube_id: str) -> dict:
         """
