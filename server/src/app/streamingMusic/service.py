@@ -440,8 +440,15 @@ class StreamingMusicAPI:
                 s3_status = 'PROCESSING',
                 s3_key = EXCLUDED.s3_key,
                 title = EXCLUDED.title,
-                duration_seconds = EXCLUDED.duration_seconds,
-                thumbnail_url = EXCLUDED.thumbnail_url
+                -- Clients can't always tell us a duration (search hits and
+                -- watch-playlist entries often arrive without one, as 0). Keep
+                -- whatever we already know rather than zeroing it out — the
+                -- stored duration is what Home and History render.
+                duration_seconds = COALESCE(
+                    NULLIF(EXCLUDED.duration_seconds, 0),
+                    tracks.duration_seconds
+                ),
+                thumbnail_url = COALESCE(NULLIF(EXCLUDED.thumbnail_url, ''), tracks.thumbnail_url)
             RETURNING id;
         """
         try:

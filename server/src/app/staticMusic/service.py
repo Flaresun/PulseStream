@@ -38,38 +38,66 @@ class StaticMusicAPI:
         watch_playlist = self.ytmusic.get_watch_playlist(currentVideoId)
         return PlaylistTracks.model_validate(watch_playlist) if watch_playlist else None
 
-    def getLyrics(self, songId: str) -> Optional[SongLyrics]:
+    def getLyrics(self, songId: str) -> SongLyrics:
         """Fetch song lyrics using a lyrics browse ID.
 
         :param songId: Must be the `lyrics` browse ID string obtained from a
                           `PlaylistResult` or `TrackResult` object (e.g., 'MPLYt_...'),
                           NOT a standard YouTube videoId or track ID.
-        :returns: A populated `SongLyrics` object if available, otherwise `None`.
+        :returns: A `SongLyrics` object; `lyrics` is empty when the song has
+                  none. Always a well-formed object rather than `None`, so the
+                  client can tell "no lyrics for this song" apart from a
+                  request that failed.
         """
+        empty = SongLyrics(lyrics=[], source="", hasTimestamps=False)
         if not songId:
-            return None
+            return empty
+        raw_lyrics = None
         try:
             raw_lyrics = self.ytmusic.get_lyrics(songId, True)
         except Exception:
-            # ytmusicapi's timed-lyrics parser can raise (e.g. missing "cueRange")
-            # on malformed upstream data; treat as "no lyrics available".
-            return None
+            # Asking for timestamps on a song that only has untimed lyrics makes
+            # ytmusicapi's cue parser raise (KeyError 'cueRange'). That is a very
+            # common case, and treating it as "no lyrics" is why the lyrics panel
+            # came up empty for so many songs — ask again without timestamps.
+            try:
+                raw_lyrics = self.ytmusic.get_lyrics(songId, False)
+            except Exception:
+                return empty
         if not raw_lyrics:
-            return None
-        raw_lines = raw_lyrics.get("lyrics", [])
-        normalized_lines = [
-            line if isinstance(line, dict) else {
-                "text": line.text,
-                "start_time": line.start_time,
-                "end_time": line.end_time,
-                "id": line.id,
-            }
-            for line in raw_lines
-        ] if isinstance(raw_lines, list) else []
+            return empty
+
+        raw_lines = raw_lyrics.get("lyrics")
+        has_timestamps = bool(raw_lyrics.get("hasTimestamps", True))
+
+        if isinstance(raw_lines, str):
+            # Songs without timed lyrics come back as one newline-separated
+            # blob instead of a list of cues. These used to be dropped on the
+            # floor, so the client got a valid-looking response with zero lines
+            # and rendered an empty lyrics panel.
+            lines = [
+                {"text": text, "start_time": 0, "end_time": 0, "id": index}
+                for index, text in enumerate(raw_lines.splitlines())
+                if text.strip()
+            ]
+            has_timestamps = False
+        elif isinstance(raw_lines, list):
+            lines = [
+                line if isinstance(line, dict) else {
+                    "text": line.text,
+                    "start_time": line.start_time,
+                    "end_time": line.end_time,
+                    "id": line.id,
+                }
+                for line in raw_lines
+            ]
+        else:
+            lines = []
+
         return SongLyrics.model_validate({
-            "lyrics": normalized_lines,
+            "lyrics": lines,
             "source": raw_lyrics.get("source") or "",
-            "hasTimestamps": raw_lyrics.get("hasTimestamps", True),
+            "hasTimestamps": has_timestamps,
         })
 
     def getSearchSuggestions(self, search: str) -> Optional[List[str]]:

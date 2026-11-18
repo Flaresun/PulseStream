@@ -31,3 +31,13 @@ htmlcov/
 postgres_data/
 .env
 ytdlp_cookies.txt
+# Xcode
+xcuserdata/
+*.xcuserstate
+DerivedData/
+build/
+
+# Signing keys / certificates (NEVER commit)
+*.pem
+*.p12
+*.mobileprovision
