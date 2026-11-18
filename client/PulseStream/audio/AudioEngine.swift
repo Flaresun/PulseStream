@@ -29,6 +29,16 @@ final class AudioEngine {
     private(set) var currentIndex: Int = 0
     var isLoopingCurrentTrack: Bool = false
 
+    /// Where the current queue came from. A radio queue is topped up from the
+    /// server as it drains; a collection (a playlist) is a closed set and must
+    /// never grow, or "play only these songs" wouldn't hold.
+    enum QueueSource: Equatable {
+        case radio
+        /// Carries the playlist's name purely so the player can say what's playing.
+        case collection(name: String)
+    }
+    private(set) var queueSource: QueueSource = .radio
+
     var currentLyricsBrowseId: String? = nil
     // True from the moment a track loads until the lookup that carries its
     // lyrics browse ID has either landed or definitively failed, so the UI can
@@ -115,6 +125,9 @@ final class AudioEngine {
     /// dropped (the user picked something else), but everything already played
     /// is kept so the back control still walks the full session.
     func playTrack(_ track: Track) {
+        // Picking a single song leaves any playlist context behind and goes
+        // back to radio, so autoplay resumes after the song ends.
+        queueSource = .radio
         if queue.isEmpty {
             queue = [track]
             currentIndex = 0
@@ -124,6 +137,34 @@ final class AudioEngine {
             trimPlayedHistory()
         }
         loadAndPlay(track: track)
+    }
+
+    /// Plays a fixed set of tracks — a playlist — and nothing else. Unlike
+    /// `playTrack`, the queue is replaced outright and never topped up from
+    /// the server, so playback stays inside the collection and stops at its
+    /// end (or loops a single track, if repeat is on).
+    ///
+    /// - Parameters:
+    ///   - startIndex: which track to start on, as an index into `tracks`.
+    ///     Ignored when `shuffled` is true, which starts from a random track.
+    ///   - shuffled: play the collection in a random order.
+    func playCollection(
+        _ tracks: [Track],
+        named name: String,
+        startingAt startIndex: Int = 0,
+        shuffled: Bool = false
+    ) {
+        guard !tracks.isEmpty else { return }
+
+        queueSource = .collection(name: name)
+        if shuffled {
+            queue = tracks.shuffled()
+            currentIndex = 0
+        } else {
+            queue = tracks
+            currentIndex = min(max(startIndex, 0), tracks.count - 1)
+        }
+        loadAndPlay(track: queue[currentIndex])
     }
 
     func play() {
@@ -214,6 +255,9 @@ final class AudioEngine {
     }
 
     private func trimPlayedHistory() {
+        // A collection is shown to the user as a whole, so dropping its
+        // earlier tracks would make the queue disagree with the playlist.
+        guard queueSource == .radio else { return }
         let excess = currentIndex - maxPlayedHistory
         guard excess > 0 else { return }
         queue.removeFirst(excess)
@@ -300,6 +344,10 @@ final class AudioEngine {
                 guard self.currentTrack?.videoId == videoId else { return }
                 self.currentLyricsBrowseId = playlist.lyrics
                 self.isResolvingLyrics = false
+
+                // A playlist is a closed set — never extend it. The lyrics
+                // lookup above still runs, since that's wanted either way.
+                guard self.queueSource == .radio else { return }
 
                 // Top the queue up whenever it's running dry, so autoplay keeps
                 // going for as long as the user listens. A queue the user has

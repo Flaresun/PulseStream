@@ -1,3 +1,7 @@
+-- Baseline schema, applied ONLY to a database that has no `users` table yet.
+-- Anything added after a deployment goes live belongs in migrations.sql, which
+-- runs on every startup — see core/database.init_db.
+--
 -- Enable extension for UUID generation (PostgreSQL 13+)
 CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 

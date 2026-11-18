@@ -45,6 +45,7 @@ def _song_to_home_song(song: Song) -> Dict[str, Any]:
         "artists": [a.model_dump() for a in song.artists],
         "thumbnails": [t.model_dump() for t in song.thumbnails],
         "durationSeconds": song.duration_seconds,
+        "isExplicit": bool(song.isExplicit),
     }
 
 
@@ -55,6 +56,9 @@ def _track_result_to_home_song(track: TrackResult) -> Dict[str, Any]:
         "artists": [a.model_dump() for a in track.artists],
         "thumbnails": [t.model_dump() for t in track.thumbnail],
         "durationSeconds": _parse_duration_seconds(track.length),
+        # Watch-playlist entries don't report it; the flag gets filled in once
+        # the track is resolved and lands in the catalogue.
+        "isExplicit": False,
     }
 
 
@@ -114,6 +118,7 @@ class HomeAPI:
             "artists": track["artists"],
             "thumbnails": [{"url": track["thumbnailUrl"], "width": 0, "height": 0}] if track["thumbnailUrl"] else [],
             "durationSeconds": track["durationSeconds"],
+            "isExplicit": bool(track.get("isExplicit")),
         }
 
     async def _get_track_stats(self) -> List[Dict[str, Any]]:
@@ -147,6 +152,7 @@ class HomeAPI:
                 t.title AS "title",
                 t.duration_seconds AS "durationSeconds",
                 t.thumbnail_url AS "thumbnailUrl",
+                t.is_explicit AS "isExplicit",
                 s.play_count AS "playCount",
                 EXTRACT(EPOCH FROM s.last_played_at) AS "lastPlayedAt",
                 s.frecency AS "frecency",

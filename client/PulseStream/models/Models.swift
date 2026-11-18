@@ -52,6 +52,12 @@ struct Track: nonisolated Codable, Identifiable, Hashable {
     let artists: [Artist]
     let durationSeconds: Int
     let thumbnails: [Thumbnail]?
+    // Optional on the wire, and defaulted in the memberwise init, so a
+    // response from a server that predates the field still decodes and every
+    // existing construction site keeps compiling. Swift's synthesised
+    // Decodable ignores default values for non-optional properties, so an
+    // Optional is what actually buys the backward compatibility here.
+    var isExplicit: Bool? = nil
 
     // Sized for list rows and the mini player (up to ~144pt @3x)
     var primaryThumbnailURL: URL? {
@@ -101,7 +107,8 @@ struct SearchSong: nonisolated Codable, Identifiable, Hashable {
             title: title,
             artists: artists.map { $0.toArtist() },
             durationSeconds: durationSeconds ?? 0,
-            thumbnails: thumbnails
+            thumbnails: thumbnails,
+            isExplicit: isExplicit
         )
     }
 }
@@ -195,12 +202,14 @@ struct ResolveStreamRequest: nonisolated Codable {
     let durationSeconds: Int
     let thumbnailUrl: String
     let artists: [ClientArtist]
+    let isExplicit: Bool
 
     enum CodingKeys: String, CodingKey {
         case title
         case durationSeconds = "duration_seconds"
         case thumbnailUrl = "thumbnail_url"
         case artists
+        case isExplicit = "is_explicit"
     }
 }
 
@@ -213,6 +222,7 @@ struct HistoryEntry: nonisolated Codable, Identifiable, Hashable {
     let artists: [SearchArtist]
     let durationSeconds: Int
     let thumbnailUrl: String?
+    var isExplicit: Bool? = nil
     let playedAt: Double // epoch seconds
 
     var id: Int { historyId }
@@ -227,7 +237,8 @@ struct HistoryEntry: nonisolated Codable, Identifiable, Hashable {
             title: title,
             artists: artists.map { $0.toArtist() },
             durationSeconds: durationSeconds,
-            thumbnails: thumbnailUrl.map { [Thumbnail(url: $0, width: 0, height: 0)] }
+            thumbnails: thumbnailUrl.map { [Thumbnail(url: $0, width: 0, height: 0)] },
+            isExplicit: isExplicit
         )
     }
 }
@@ -246,6 +257,7 @@ struct HomeSong: nonisolated Codable, Identifiable, Hashable {
     let artists: [SearchArtist]
     let thumbnails: [Thumbnail]
     let durationSeconds: Int?
+    var isExplicit: Bool? = nil
 
     var id: String { videoId }
 
@@ -255,7 +267,8 @@ struct HomeSong: nonisolated Codable, Identifiable, Hashable {
             title: title,
             artists: artists.map { $0.toArtist() },
             durationSeconds: durationSeconds ?? 0,
-            thumbnails: thumbnails
+            thumbnails: thumbnails,
+            isExplicit: isExplicit
         )
     }
 }
@@ -272,4 +285,101 @@ struct HomeResponse: nonisolated Codable {
 extension Color {
     /// Used to mark tracks that are fully cached in S3.
     static let neonBlue = Color(red: 0.25, green: 0.78, blue: 1.0)
+}
+
+// MARK: - Library Models
+
+/// A playlist as it appears in the library list — contents not included.
+struct PlaylistSummary: nonisolated Codable, Identifiable, Hashable {
+    let id: Int
+    let name: String
+    let trackCount: Int
+    /// Up to four covers, in playlist order, for the list artwork.
+    var thumbnailUrls: [String] = []
+    let createdAt: Double
+    let updatedAt: Double
+}
+
+/// One entry in a playlist. `position` is the server's ordinal: sparse, not a
+/// dense 0..n-1 range, so removing a track never renumbers the others.
+struct PlaylistTrack: nonisolated Codable, Identifiable, Hashable {
+    var id: String { videoId }
+    let videoId: String
+    let title: String
+    let artists: [SearchArtist]
+    let durationSeconds: Int
+    let thumbnailUrl: String?
+    var isExplicit: Bool? = nil
+    let position: Int
+
+    func toTrack() -> Track {
+        Track(
+            videoId: videoId,
+            title: title,
+            artists: artists.map { $0.toArtist() },
+            durationSeconds: durationSeconds,
+            thumbnails: thumbnailUrl.map { [Thumbnail(url: $0, width: 0, height: 0)] },
+            isExplicit: isExplicit
+        )
+    }
+}
+
+struct PlaylistDetail: nonisolated Codable, Identifiable, Hashable {
+    let id: Int
+    let name: String
+    let trackCount: Int
+    var thumbnailUrls: [String] = []
+    let createdAt: Double
+    let updatedAt: Double
+    var tracks: [PlaylistTrack] = []
+
+    var summary: PlaylistSummary {
+        PlaylistSummary(
+            id: id,
+            name: name,
+            trackCount: trackCount,
+            thumbnailUrls: thumbnailUrls,
+            createdAt: createdAt,
+            updatedAt: updatedAt
+        )
+    }
+}
+
+struct PlaylistNameRequest: nonisolated Encodable {
+    let name: String
+}
+
+/// Carries enough metadata for the server to register a song it may never have
+/// seen — a track can be added to a playlist without ever having been played,
+/// so we can't assume /stream/resolve has run for it.
+struct AddPlaylistTrackRequest: nonisolated Encodable {
+    let videoId: String
+    let title: String
+    let durationSeconds: Int
+    let thumbnailUrl: String?
+    let isExplicit: Bool
+    let artists: [PlaylistArtistPayload]
+
+    init(track: Track) {
+        self.videoId = track.videoId
+        self.title = track.title
+        self.durationSeconds = track.durationSeconds
+        self.thumbnailUrl = track.thumbnails?.first?.url
+        self.isExplicit = track.isExplicit ?? false
+        self.artists = track.artists.map {
+            PlaylistArtistPayload(name: $0.name, id: $0.browseId)
+        }
+    }
+}
+
+struct PlaylistArtistPayload: nonisolated Encodable {
+    let name: String
+    let id: String?
+}
+
+/// `added` is false when the song was already in the playlist. That isn't an
+/// error — playlists reject duplicates, so asking twice is a no-op.
+struct AddPlaylistTrackResponse: nonisolated Codable {
+    let added: Bool
+    let trackCount: Int
 }

@@ -38,6 +38,7 @@ struct HistoryView: View {
                 }
                 .buttonStyle(.plain)
                 .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
+                .addToPlaylistAction(for: entry.toTrack())
             }
             .listStyle(.plain)
         }
@@ -59,9 +60,7 @@ private struct HistoryRowView: View {
             .clipShape(RoundedRectangle(cornerRadius: 6))
 
             VStack(alignment: .leading, spacing: 3) {
-                Text(entry.title)
-                    .font(.body)
-                    .lineLimit(1)
+                TitleWithExplicitBadge(title: entry.title, isExplicit: entry.isExplicit)
                 Text(entry.artists.map(\.name).joined(separator: ", "))
                     .font(.subheadline)
                     .foregroundStyle(.secondary)

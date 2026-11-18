@@ -89,7 +89,8 @@ actor APIClient {
             title: track.title,
             durationSeconds: track.durationSeconds,
             thumbnailUrl: track.thumbnails?.first?.url ?? "",
-            artists: clientArtists
+            artists: clientArtists,
+            isExplicit: track.isExplicit ?? false
         )
 
         do {
@@ -144,7 +145,89 @@ actor APIClient {
         }
     }
 
+    // MARK: - Library
+
+    func getPlaylists() async throws -> [PlaylistSummary] {
+        try await get("/library/playlists")
+    }
+
+    func getPlaylist(id: Int) async throws -> PlaylistDetail {
+        try await get("/library/playlists/\(id)")
+    }
+
+    func createPlaylist(name: String) async throws -> PlaylistSummary {
+        try await send("/library/playlists", method: "POST", body: PlaylistNameRequest(name: name))
+    }
+
+    func renamePlaylist(id: Int, name: String) async throws -> PlaylistDetail {
+        try await send("/library/playlists/\(id)", method: "PATCH", body: PlaylistNameRequest(name: name))
+    }
+
+    func deletePlaylist(id: Int) async throws {
+        try await sendIgnoringResponse("/library/playlists/\(id)", method: "DELETE", body: Optional<PlaylistNameRequest>.none)
+    }
+
+    func addTrackToPlaylist(playlistId: Int, track: Track) async throws -> AddPlaylistTrackResponse {
+        try await send(
+            "/library/playlists/\(playlistId)/tracks",
+            method: "POST",
+            body: AddPlaylistTrackRequest(track: track)
+        )
+    }
+
+    func removeTrackFromPlaylist(playlistId: Int, videoId: String) async throws -> AddPlaylistTrackResponse {
+        let encoded = videoId.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? videoId
+        return try await send(
+            "/library/playlists/\(playlistId)/tracks/\(encoded)",
+            method: "DELETE",
+            body: Optional<PlaylistNameRequest>.none
+        )
+    }
+
     // MARK: - Shared Helpers
+
+    /// A request with an optional JSON body that decodes a JSON response.
+    private func send<Body: Encodable, T: Decodable>(
+        _ path: String,
+        method: String,
+        body: Body?
+    ) async throws -> T {
+        let (data, response) = try await performRequest(path, method: method, body: body)
+        return try decode(T.self, from: data, response: response)
+    }
+
+    /// For endpoints that answer 204 No Content, where there's nothing to decode.
+    private func sendIgnoringResponse<Body: Encodable>(
+        _ path: String,
+        method: String,
+        body: Body?
+    ) async throws {
+        let (_, response) = try await performRequest(path, method: method, body: body)
+        guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
+            throw APIError.requestFailed((response as? HTTPURLResponse)?.statusCode ?? -1)
+        }
+    }
+
+    private func performRequest<Body: Encodable>(
+        _ path: String,
+        method: String,
+        body: Body?
+    ) async throws -> (Data, URLResponse) {
+        guard let url = URL(string: "\(baseURL)\(path)") else {
+            throw APIError.invalidURL
+        }
+        var request = URLRequest(url: url)
+        request.httpMethod = method
+        if let body {
+            request.addValue("application/json", forHTTPHeaderField: "Content-Type")
+            do {
+                request.httpBody = try JSONEncoder().encode(body)
+            } catch {
+                throw APIError.decodingFailed(error)
+            }
+        }
+        return try await perform(request)
+    }
 
     private func perform(_ request: URLRequest) async throws -> (Data, URLResponse) {
         do {

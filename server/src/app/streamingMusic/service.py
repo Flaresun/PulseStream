@@ -9,6 +9,8 @@ import boto3
 from botocore.exceptions import BotoCoreError, ClientError
 import yt_dlp
 
+from app.core.catalog import upsert_artists_and_link
+
 logger = logging.getLogger("StreamingMusicAPI")
 logging.basicConfig(level=logging.INFO)
 
@@ -433,8 +435,8 @@ class StreamingMusicAPI:
         Validates the database output strictly. Raises RuntimeError on failure.
         """
         sql_upsert = """
-            INSERT INTO tracks (youtube_id, title, duration_seconds, thumbnail_url, s3_status, s3_key)
-            VALUES (%s, %s, %s, %s, 'PROCESSING', %s)
+            INSERT INTO tracks (youtube_id, title, duration_seconds, thumbnail_url, is_explicit, s3_status, s3_key)
+            VALUES (%s, %s, %s, %s, %s, 'PROCESSING', %s)
             ON CONFLICT (youtube_id) 
             DO UPDATE SET 
                 s3_status = 'PROCESSING',
@@ -448,7 +450,10 @@ class StreamingMusicAPI:
                     NULLIF(EXCLUDED.duration_seconds, 0),
                     tracks.duration_seconds
                 ),
-                thumbnail_url = COALESCE(NULLIF(EXCLUDED.thumbnail_url, ''), tracks.thumbnail_url)
+                thumbnail_url = COALESCE(NULLIF(EXCLUDED.thumbnail_url, ''), tracks.thumbnail_url),
+                -- Sticky: only some upstream endpoints report the flag, and
+                -- clearing it would make the badge come and go.
+                is_explicit = tracks.is_explicit OR EXCLUDED.is_explicit
             RETURNING id;
         """
         try:
@@ -459,6 +464,7 @@ class StreamingMusicAPI:
                     meta["title"], 
                     meta["duration_seconds"], 
                     meta["thumbnail_url"], 
+                    bool(meta.get("is_explicit")),
                     s3_key
                 )
             )
@@ -477,50 +483,11 @@ class StreamingMusicAPI:
 
     async def _upsert_artists_and_link(self, track_id: int, artists: List[dict]) -> None:
         """
-        Upserts each artist into the `artists` table and creates Many-to-Many links in `track_artists`.
-        Uses best-effort logic: skips individual artists on failure to prevent stream crashing.
+        Upserts artists and links them to the track. Delegates to the shared
+        catalogue helper so this and the library's add-to-playlist path can't
+        drift apart on how artist metadata is written.
         """
-        for index, artist in enumerate(artists):
-            browse_id = artist.get("browse_id")
-            name = artist.get("name")
-            
-            if not browse_id or not name:
-                logger.warning(f"Artist payload missing required fields for track ID {track_id}. Skipping artist: {artist}")
-                continue
-
-            try:
-                # 1. Upsert Artist
-                artist_sql = """
-                    INSERT INTO artists (browse_id, name)
-                    VALUES (%s, %s)
-                    ON CONFLICT (browse_id)
-                    DO UPDATE SET name = EXCLUDED.name
-                    RETURNING id;
-                """
-                artist_res = await self.db_execute(artist_sql, (browse_id, name))
-                
-                # Validation: Skip this artist if the DB acts weirdly instead of crashing
-                if not artist_res or not isinstance(artist_res, list) or len(artist_res) == 0:
-                    logger.error(f"Database returned empty result when upserting artist '{name}' ({browse_id}). Skipping link.")
-                    continue
-                    
-                artist_id = artist_res[0].get("id")
-                if not artist_id:
-                    logger.error(f"Missing internal 'id' for artist '{name}' ({browse_id}). Skipping link.")
-                    continue
-
-                # 2. Link Track and Artist
-                link_sql = """
-                    INSERT INTO track_artists (track_id, artist_id, artist_order)
-                    VALUES (%s, %s, %s)
-                    ON CONFLICT (track_id, artist_id) DO NOTHING;
-                """
-                await self.db_execute(link_sql, (track_id, artist_id, index))
-                
-            except Exception as e:
-                # Option B: Catch errors per artist so the rest of the stream continues
-                logger.error(f"Failed to process artist '{name}' ({browse_id}) for track {track_id}: {str(e)}")
-                continue
+        await upsert_artists_and_link(self.db_execute, track_id, artists)
 
     async def _download_raw_audio(self, youtube_url: str, job_dir: Path) -> tuple[Path, int]:
         """

@@ -8,6 +8,7 @@ struct NowPlayingView: View {
 
     @State private var scrubPosition: Double? = nil
     @State private var centerContent: CenterContent = .artwork
+    @State private var isAddToPlaylistPresented = false
 
     private var displayProgress: Double {
         scrubPosition ?? audioEngine.playbackProgress
@@ -51,6 +52,7 @@ struct NowPlayingView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
 
                 VStack(spacing: 20) {
+                    sourceLabel
                     trackInfo
                     scrubber
                     controls
@@ -73,6 +75,11 @@ struct NowPlayingView: View {
                             .font(.body.weight(.semibold))
                             .foregroundStyle(.secondary)
                     }
+                }
+            }
+            .sheet(isPresented: $isAddToPlaylistPresented) {
+                if let track = audioEngine.currentTrack {
+                    AddToPlaylistSheet(track: track)
                 }
             }
         }
@@ -109,16 +116,43 @@ struct NowPlayingView: View {
     }
 
     private var trackInfo: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(audioEngine.currentTrack?.title ?? "")
-                .font(.title3.weight(.bold))
-                .lineLimit(1)
-            Text(audioEngine.currentTrack?.artists.map(\.name).joined(separator: ", ") ?? "")
-                .font(.body)
+        HStack(alignment: .center, spacing: 12) {
+            VStack(alignment: .leading, spacing: 4) {
+                TitleWithExplicitBadge(
+                    title: audioEngine.currentTrack?.title ?? "",
+                    isExplicit: audioEngine.currentTrack?.isExplicit,
+                    font: .title3,
+                    weight: .bold
+                )
+                Text(audioEngine.currentTrack?.artists.map(\.name).joined(separator: ", ") ?? "")
+                    .font(.body)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            Button {
+                isAddToPlaylistPresented = true
+            } label: {
+                Image(systemName: "text.badge.plus")
+                    .font(.title3)
+            }
+            .tint(.primary)
+            .disabled(audioEngine.currentTrack == nil)
+            .accessibilityLabel("Add to Playlist")
+        }
+    }
+
+    /// Names the playlist when one is driving playback, so it's clear the
+    /// queue is a closed set rather than endless radio.
+    @ViewBuilder
+    private var sourceLabel: some View {
+        if case .collection(let name) = audioEngine.queueSource {
+            Label(name, systemImage: "music.note.list")
+                .font(.caption.weight(.semibold))
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var scrubber: some View {

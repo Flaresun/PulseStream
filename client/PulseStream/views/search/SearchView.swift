@@ -56,6 +56,7 @@ struct SearchView: View {
             }
             .buttonStyle(.plain)
             .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
+            .addToPlaylistAction(for: song.toTrack())
         }
         .listStyle(.plain)
     }

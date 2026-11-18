@@ -74,9 +74,7 @@ private struct QueueRowView: View {
             .clipShape(RoundedRectangle(cornerRadius: 6))
 
             VStack(alignment: .leading, spacing: 3) {
-                Text(track.title)
-                    .font(.body)
-                    .lineLimit(1)
+                TitleWithExplicitBadge(title: track.title, isExplicit: track.isExplicit)
                 Text(track.artists.map(\.name).joined(separator: ", "))
                     .font(.subheadline)
                     .foregroundStyle(.secondary)

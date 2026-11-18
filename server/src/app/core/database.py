@@ -109,6 +109,18 @@ async def init_db():
             )
             await conn.commit()
 
+            # Incremental changes run every time, on new and existing databases
+            # alike — schema.sql is skipped entirely once the schema exists, so
+            # it can't deliver anything to a live deployment.
+            migrations_path = Path(__file__).parent / "migrations.sql"
+            if migrations_path.exists():
+                logger.info("Applying incremental migrations...")
+                await cur.execute(migrations_path.read_text(encoding="utf-8"))
+                await conn.commit()
+                logger.info("Migrations applied.")
+            else:
+                logger.warning(f"migrations.sql not found at {migrations_path}")
+
 
 async def close_db():
     """Closes the connection pool on application shutdown."""

@@ -203,6 +203,7 @@ private struct HomeGridPage: View {
                     HomeSongCard(song: song)
                 }
                 .buttonStyle(.plain)
+                .addToPlaylistAction(for: song.toTrack())
             }
         }
         .padding(.horizontal)
@@ -230,9 +231,12 @@ private struct HomeSongCard: View {
                 }
                 .clipShape(RoundedRectangle(cornerRadius: 8))
 
-            Text(song.title)
-                .font(.caption.weight(.medium))
-                .lineLimit(1)
+            TitleWithExplicitBadge(
+                title: song.title,
+                isExplicit: song.isExplicit,
+                font: .caption,
+                weight: .medium
+            )
             Text(song.artists.map(\.name).joined(separator: ", "))
                 .font(.caption2)
                 .foregroundStyle(.secondary)
@@ -261,9 +265,12 @@ private struct HomeRowCard: View {
                 .clipShape(RoundedRectangle(cornerRadius: 10))
 
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(song.title)
-                        .font(.body.weight(.semibold))
-                        .lineLimit(1)
+                    TitleWithExplicitBadge(
+                        title: song.title,
+                        isExplicit: song.isExplicit,
+                        font: .body,
+                        weight: .semibold
+                    )
                     Text(song.artists.map(\.name).joined(separator: ", "))
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
@@ -274,5 +281,6 @@ private struct HomeRowCard: View {
             }
         }
         .buttonStyle(.plain)
+        .addToPlaylistAction(for: song.toTrack())
     }
 }

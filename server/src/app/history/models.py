@@ -14,6 +14,7 @@ class HistoryEntry(BaseModel):
     artists: List[HistoryArtist]
     durationSeconds: int
     thumbnailUrl: Optional[str] = None
+    isExplicit: bool = False
     playedAt: float  # epoch seconds
 
 

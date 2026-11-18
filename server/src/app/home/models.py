@@ -10,6 +10,7 @@ class HomeSong(BaseModel):
     artists: List[Artist] = []
     thumbnails: List[Thumbnail] = []
     durationSeconds: Optional[int] = None
+    isExplicit: bool = False
 
 
 class HomeResponse(BaseModel):

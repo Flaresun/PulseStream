@@ -21,9 +21,12 @@ struct MiniPlayerBar: View {
                     .clipShape(RoundedRectangle(cornerRadius: 6))
 
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(audioEngine.currentTrack?.title ?? "")
-                            .font(.footnote.weight(.semibold))
-                            .lineLimit(1)
+                        TitleWithExplicitBadge(
+                            title: audioEngine.currentTrack?.title ?? "",
+                            isExplicit: audioEngine.currentTrack?.isExplicit,
+                            font: .footnote,
+                            weight: .semibold
+                        )
                         Text(audioEngine.currentTrack?.artists.first?.name ?? "")
                             .font(.caption)
                             .foregroundStyle(.secondary)

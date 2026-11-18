@@ -15,9 +15,7 @@ struct SongRowView: View {
             .clipShape(RoundedRectangle(cornerRadius: 6))
 
             VStack(alignment: .leading, spacing: 3) {
-                Text(song.title)
-                    .font(.body)
-                    .lineLimit(1)
+                TitleWithExplicitBadge(title: song.title, isExplicit: song.isExplicit)
                 Text(song.artists.map(\.name).joined(separator: ", "))
                     .font(.subheadline)
                     .foregroundStyle(.secondary)

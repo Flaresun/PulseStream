@@ -55,6 +55,7 @@ class HistoryAPI:
                 t.title AS "title",
                 t.duration_seconds AS "durationSeconds",
                 t.thumbnail_url AS "thumbnailUrl",
+                t.is_explicit AS "isExplicit",
                 EXTRACT(EPOCH FROM h.played_at) AS "playedAt",
                 COALESCE(
                     json_agg(

@@ -47,3 +47,5 @@ class ClientTrackMetadata(BaseModel):
     duration_seconds: int
     thumbnail_url: str
     artists: List[ClientArtist]
+    # Defaulted so a client built before this field existed still resolves.
+    is_explicit: bool = False

@@ -3,6 +3,7 @@ from app.staticMusic.router import router as staticMusicRouter
 from app.streamingMusic.router import router as streamingMusicRouter
 from app.history.router import router as historyRouter
 from app.home.router import router as homeRouter
+from app.library.router import router as libraryRouter
 
 # Main aggregator router
 v1_router = APIRouter()
@@ -12,3 +13,4 @@ v1_router.include_router(staticMusicRouter, prefix="/songs", tags=["Songs"])
 v1_router.include_router(streamingMusicRouter, prefix="/stream", tags=["Stream"])
 v1_router.include_router(historyRouter, prefix="/history", tags=["History"])
 v1_router.include_router(homeRouter, prefix="/home", tags=["Home"])
+v1_router.include_router(libraryRouter, prefix="/library", tags=["Library"])
