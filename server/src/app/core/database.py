@@ -63,6 +63,23 @@ async def init_db():
         open=False,
         min_size=1,
         max_size=10,
+        # Verify a connection is actually alive before handing it out.
+        # Neon closes idle connections and suspends the compute after a few
+        # idle minutes, so a pooled connection is frequently dead by the time
+        # the next request wants it. Without this the pool hands over the
+        # corpse and the query dies with "SSL connection has been closed
+        # unexpectedly" — which is why the first request after a quiet period
+        # returned a 500 (and /health a 503) while every later one worked.
+        # Costs one round trip per checkout; against a same-region Neon that
+        # is immaterial next to failing the request.
+        check=AsyncConnectionPool.check_connection,
+        # Retire idle connections well inside Neon's own idle timeout, so the
+        # check above rarely has anything to catch.
+        max_idle=120.0,
+        max_lifetime=1800.0,
+        # Surface an unreachable database in seconds rather than the default
+        # five minutes, so a request fails fast and the client can retry.
+        reconnect_timeout=30.0,
     )
     await pool.open()
     logger.info("Database connection pool established.")
