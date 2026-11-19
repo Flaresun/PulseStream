@@ -1,4 +1,7 @@
-FROM python:3.12-slim
+# Must match .python-version / requires-python. uv refuses to use an
+# interpreter older than the project requires, and would silently download its
+# own instead of using this one.
+FROM python:3.14-slim
 
 # Install system dependencies (FFmpeg)
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -19,8 +22,15 @@ WORKDIR /app
 # Enable bytecode compilation and copy files
 ENV UV_COMPILE_BYTECODE=1
 ENV VIRTUAL_ENV=/app/.venv
-# Copy project dependency files first for better layer caching
-COPY pyproject.toml uv.lock ./
+# Use the interpreter in this image and never fetch another. requires-python is
+# an open-ended ">=3.14", so left to itself uv picks the newest CPython that
+# exists at build time — which is how this build broke the day 3.15 shipped:
+# uv.lock pins psycopg-binary, which publishes cp314 wheels and no sdist, so a
+# 3.15 interpreter has nothing to install. Failing loudly beats drifting.
+ENV UV_PYTHON_DOWNLOADS=never
+# .python-version is copied too, so uv pins the same version here as it does
+# locally rather than inferring one.
+COPY pyproject.toml uv.lock .python-version ./
 
 # Install dependencies (without installing the root package yet)
 RUN uv sync --frozen --no-install-project --no-dev
